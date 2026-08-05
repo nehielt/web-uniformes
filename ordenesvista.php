@@ -38,12 +38,15 @@
                     {
                         //echo "<pre>";print_r($row);echo "</pre>";
                         $id = $row['id'];
+                        $fechaOrden = $row['fecha'];
                         $fecha = invierte_fecha($row['fecha'],0);
                         $idempleados = $row['empleado'];
                         $nombres = trim(b_combo($mysqli,'nombres','empleados','id',$idempleados));
                         $apellidos = trim(b_combo($mysqli,'apellidos','empleados','id',$idempleados));
                         $expediente = b_combo($mysqli,'expediente','empleados','id',$idempleados);
                         $empleado = $nombres.' '.$apellidos;
+                        $diasTranscurridos = floor((strtotime(date('Y-m-d')) - strtotime($fechaOrden)) / 86400);
+                        $puedeModificar = $diasTranscurridos <= 3;
                
                 ?>	
                         <tr class="<?php echo $color[$ncolor]?>">
@@ -52,6 +55,9 @@
                             <td><?php echo nl2br(trim($empleado))?></td>
                             <td>
                                 <input type="button"  class="boton boton-verde" title="VER" value="VER" onclick="javascript:{lanzar('nota.php?id=<?php echo $id?>')}" />
+                                <?php if ($puedeModificar) { ?>
+                                <input type="button"  class="boton boton-amarillo" title="MODIFICAR" value="MODIFICAR" onclick="javascript:{lanzar('ordenesmodificar.php?id=<?php echo $id?>')}" />
+                                <?php } ?>
                             </td>
                         </tr> 
                 <?php

@@ -5,6 +5,202 @@ if (session_status() !== PHP_SESSION_ACTIVE) {
 
 include 'conexion_db.php';
 
+function schema_table_exists($mysqli, $table)
+{
+    $tableEsc = mysqli_real_escape_string($mysqli, $table);
+    $sql = "SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = '$tableEsc' LIMIT 1";
+    $result = mysqli_query($mysqli, $sql);
+
+    return $result && mysqli_num_rows($result) > 0;
+}
+
+function schema_column_exists($mysqli, $table, $column)
+{
+    $tableEsc = mysqli_real_escape_string($mysqli, $table);
+    $columnEsc = mysqli_real_escape_string($mysqli, $column);
+    $sql = "SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = '$tableEsc' AND column_name = '$columnEsc' LIMIT 1";
+    $result = mysqli_query($mysqli, $sql);
+
+    return $result && mysqli_num_rows($result) > 0;
+}
+
+function schema_get_column_metadata($mysqli, $table, $column)
+{
+    $tableEsc = mysqli_real_escape_string($mysqli, $table);
+    $columnEsc = mysqli_real_escape_string($mysqli, $column);
+    $sql = "SELECT COLUMN_TYPE, IS_NULLABLE
+            FROM information_schema.columns
+            WHERE table_schema = DATABASE()
+              AND table_name = '$tableEsc'
+              AND column_name = '$columnEsc'
+            LIMIT 1";
+    $result = mysqli_query($mysqli, $sql);
+
+    if (!$result) {
+        return null;
+    }
+
+    $row = mysqli_fetch_assoc($result);
+
+    return $row ?: null;
+}
+
+function schema_index_exists($mysqli, $table, $indexName)
+{
+    $tableEsc = mysqli_real_escape_string($mysqli, $table);
+    $indexEsc = mysqli_real_escape_string($mysqli, $indexName);
+    $sql = "SHOW INDEX FROM `$tableEsc` WHERE Key_name = '$indexEsc'";
+    $result = mysqli_query($mysqli, $sql);
+
+    return $result && mysqli_num_rows($result) > 0;
+}
+
+function schema_foreign_key_exists($mysqli, $table, $constraintName)
+{
+    $tableEsc = mysqli_real_escape_string($mysqli, $table);
+    $constraintEsc = mysqli_real_escape_string($mysqli, $constraintName);
+    $sql = "SELECT 1
+            FROM information_schema.table_constraints
+            WHERE table_schema = DATABASE()
+              AND table_name = '$tableEsc'
+              AND constraint_type = 'FOREIGN KEY'
+              AND constraint_name = '$constraintEsc'
+            LIMIT 1";
+    $result = mysqli_query($mysqli, $sql);
+
+    return $result && mysqli_num_rows($result) > 0;
+}
+
+function schema_add_index($mysqli, $table, $indexName, $definition, $unique = false)
+{
+    if (!schema_table_exists($mysqli, $table) || schema_index_exists($mysqli, $table, $indexName)) {
+        return;
+    }
+
+    $uniqueSql = $unique ? 'UNIQUE ' : '';
+    $sql = "ALTER TABLE `$table` ADD {$uniqueSql}INDEX `$indexName` ($definition)";
+    mysqli_query($mysqli, $sql);
+}
+
+function schema_align_foreign_key_column($mysqli, $table, $column, $referencedTable, $referencedColumn)
+{
+    if (!schema_table_exists($mysqli, $table) || !schema_table_exists($mysqli, $referencedTable)) {
+        return;
+    }
+
+    if (!schema_column_exists($mysqli, $table, $column) || !schema_column_exists($mysqli, $referencedTable, $referencedColumn)) {
+        return;
+    }
+
+    $childColumn = schema_get_column_metadata($mysqli, $table, $column);
+    $parentColumn = schema_get_column_metadata($mysqli, $referencedTable, $referencedColumn);
+
+    if ($childColumn === null || $parentColumn === null) {
+        return;
+    }
+
+    if ($childColumn['COLUMN_TYPE'] === $parentColumn['COLUMN_TYPE']) {
+        return;
+    }
+
+    $nullability = $childColumn['IS_NULLABLE'] === 'YES' ? 'NULL' : 'NOT NULL';
+    $sql = "ALTER TABLE `$table` MODIFY `$column` {$parentColumn['COLUMN_TYPE']} $nullability";
+    mysqli_query($mysqli, $sql);
+}
+
+function schema_add_foreign_key($mysqli, $table, $constraintName, $column, $referencedTable, $referencedColumn, $onDelete = 'RESTRICT', $onUpdate = 'CASCADE')
+{
+    if (!schema_table_exists($mysqli, $table) || !schema_table_exists($mysqli, $referencedTable)) {
+        return;
+    }
+
+    if (!schema_column_exists($mysqli, $table, $column) || !schema_column_exists($mysqli, $referencedTable, $referencedColumn)) {
+        return;
+    }
+
+    if (schema_foreign_key_exists($mysqli, $table, $constraintName)) {
+        return;
+    }
+
+    schema_align_foreign_key_column($mysqli, $table, $column, $referencedTable, $referencedColumn);
+
+    $sql = "ALTER TABLE `$table`
+            ADD CONSTRAINT `$constraintName`
+            FOREIGN KEY (`$column`) REFERENCES `$referencedTable` (`$referencedColumn`)
+            ON DELETE $onDelete
+            ON UPDATE $onUpdate";
+    mysqli_query($mysqli, $sql);
+}
+
+function schema_cleanup_orphans($mysqli)
+{
+    $cleanupQueries = [
+        "DELETE e FROM empleados e LEFT JOIN cargos c ON e.cargo = c.id WHERE e.cargo IS NOT NULL AND c.id IS NULL",
+        "DELETE e FROM empleados e LEFT JOIN ubicaciones u ON e.ubicacion = u.id WHERE e.ubicacion IS NOT NULL AND u.id IS NULL",
+        "DELETE i FROM inventario i LEFT JOIN articulos a ON i.idarticulos = a.id WHERE i.idarticulos IS NOT NULL AND a.id IS NULL",
+        "DELETE i FROM inventario i LEFT JOIN colores c ON i.idcolores = c.id WHERE i.idcolores IS NOT NULL AND c.id IS NULL",
+        "DELETE i FROM inventario i LEFT JOIN tallas t ON i.idtallas = t.id WHERE i.idtallas IS NOT NULL AND t.id IS NULL",
+        "DELETE i FROM inventario i LEFT JOIN generos g ON i.idgeneros = g.id WHERE i.idgeneros IS NOT NULL AND g.id IS NULL",
+        "DELETE o FROM ordenes o LEFT JOIN empleados e ON o.empleado = e.id WHERE o.empleado IS NOT NULL AND e.id IS NULL",
+        "DELETE d FROM detalles d LEFT JOIN ordenes o ON d.orden = o.id WHERE d.orden IS NOT NULL AND o.id IS NULL",
+        "DELETE d FROM detalles d LEFT JOIN inventario i ON d.inventario = i.id WHERE d.inventario IS NOT NULL AND i.id IS NULL"
+    ];
+
+    foreach ($cleanupQueries as $sql) {
+        mysqli_query($mysqli, $sql);
+    }
+}
+
+function schema_integridad_init($mysqli)
+{
+    schema_cleanup_orphans($mysqli);
+
+    $indexes = [
+        ['empleados', 'idx_empleados_cargo', '`cargo`'],
+        ['empleados', 'idx_empleados_ubicacion', '`ubicacion`'],
+        ['empleados', 'idx_empleados_activo_expediente', '`activo`, `expediente`'],
+        ['inventario', 'idx_inventario_articulo', '`idarticulos`'],
+        ['inventario', 'idx_inventario_color', '`idcolores`'],
+        ['inventario', 'idx_inventario_talla', '`idtallas`'],
+        ['inventario', 'idx_inventario_genero', '`idgeneros`'],
+        ['inventario', 'idx_inventario_catalogo', '`idarticulos`, `idcolores`, `idtallas`, `idgeneros`'],
+        ['ordenes', 'idx_ordenes_empleado', '`empleado`'],
+        ['ordenes', 'idx_ordenes_empleado_fecha', '`empleado`, `fecha`'],
+        ['detalles', 'idx_detalles_orden', '`orden`'],
+        ['detalles', 'idx_detalles_inventario', '`inventario`'],
+        ['detalles', 'idx_detalles_orden_inventario', '`orden`, `inventario`'],
+        ['auditoria', 'idx_auditoria_fecha', '`fecha`']
+    ];
+
+    foreach ($indexes as $index) {
+        schema_add_index($mysqli, $index[0], $index[1], $index[2]);
+    }
+
+    $foreignKeys = [
+        ['empleados', 'fk_empleados_cargo', 'cargo', 'cargos', 'id', 'RESTRICT'],
+        ['empleados', 'fk_empleados_ubicacion', 'ubicacion', 'ubicaciones', 'id', 'RESTRICT'],
+        ['inventario', 'fk_inventario_articulo', 'idarticulos', 'articulos', 'id', 'RESTRICT'],
+        ['inventario', 'fk_inventario_color', 'idcolores', 'colores', 'id', 'RESTRICT'],
+        ['inventario', 'fk_inventario_talla', 'idtallas', 'tallas', 'id', 'RESTRICT'],
+        ['inventario', 'fk_inventario_genero', 'idgeneros', 'generos', 'id', 'RESTRICT'],
+        ['ordenes', 'fk_ordenes_empleado', 'empleado', 'empleados', 'id', 'RESTRICT'],
+        ['detalles', 'fk_detalles_orden', 'orden', 'ordenes', 'id', 'CASCADE'],
+        ['detalles', 'fk_detalles_inventario', 'inventario', 'inventario', 'id', 'RESTRICT']
+    ];
+
+    foreach ($foreignKeys as $foreignKey) {
+        schema_add_foreign_key(
+            $mysqli,
+            $foreignKey[0],
+            $foreignKey[1],
+            $foreignKey[2],
+            $foreignKey[3],
+            $foreignKey[4],
+            $foreignKey[5]
+        );
+    }
+}
+
 function seguridad_init()
 {
     global $mysqli;
@@ -52,6 +248,8 @@ function seguridad_init()
         fecha DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;";
     mysqli_query($mysqli, $qry);
+
+    schema_integridad_init($mysqli);
 
     $qry = "SELECT id FROM usuarios WHERE username = 'admin' LIMIT 1";
     $result = mysqli_query($mysqli, $qry);

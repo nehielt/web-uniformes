@@ -443,3 +443,97 @@
 	<?php 
             }
         }
+
+        // AQUI SE MODIFICA LA ORDEN
+        if ($metodo == 'ordenesmodificar')
+        {
+            $guardar = 1;
+            $idorden = intval($_GET['id'] ?? 0);
+            $nombreUsuario = trim($_POST['nombre_usuario'] ?? '');
+            if ($nombreUsuario === '') {
+                $nombreUsuario = !empty($_SESSION['nombre_completo']) ? trim($_SESSION['nombre_completo']) : (!empty($_SESSION['usuario']) ? trim($_SESSION['usuario']) : '');
+            }
+
+            $qryOrden = "select * from ordenes where id=$idorden";
+            $resultOrden = mysqli_query($mysqli,$qryOrden) or die('La consulta falló: '.$mysqli -> error);
+            $rowOrden = mysqli_fetch_array($resultOrden, MYSQLI_ASSOC);
+            $idempleados = trim($rowOrden['empleado']);
+
+            $detallesActuales = array();
+            $qryDetalles = "select * from detalles where orden=$idorden";
+            $resultDetalles = mysqli_query($mysqli,$qryDetalles) or die('La consulta falló: '.$mysqli -> error);
+            while($rowDetalle = mysqli_fetch_array($resultDetalles, MYSQLI_ASSOC))
+            {
+                $detallesActuales[$rowDetalle['inventario']] = $rowDetalle['cantidad'];
+            }
+
+            $cantidad = $_POST['cantidad'];
+            $total = count($cantidad);
+
+            for ($i = 1; $i <= $total; $i++)
+            {
+                if ($cantidad[$i] <> '')
+                {
+                    $existencia = b_combo($mysqli,'existencia','inventario','id',$i);
+                    $cantidadAnterior = isset($detallesActuales[$i]) ? $detallesActuales[$i] : 0;
+                    $disponible = $existencia + $cantidadAnterior;
+                    if ($cantidad[$i] > $disponible)
+                    {
+                        $guardar = 0;
+    ?>
+                        <script language=javascript>
+                            alert('NO HAY SUFICIENTES UNIDADES DE UNO DE LOS PRODUCTOS');
+                            window.location.href='ordenesmodificar.php?id=<?php echo $idorden?>';
+                        </script>
+    <?php
+                    }
+                }
+            }
+
+            if ($guardar == 1)
+            {
+                foreach ($detallesActuales as $idinventario => $cantidadAnterior)
+                {
+                    $existencia = b_combo($mysqli,'existencia','inventario','id',$idinventario);
+                    $nuevaExistencia = $existencia + $cantidadAnterior;
+                    $updInventario = "update inventario set existencia = '$nuevaExistencia' where id=$idinventario";
+                    mysqli_query($mysqli,$updInventario) or die('El Update falló: '.$mysqli -> error);
+                    registro_auditoria('inventario','UPDATE','Restauró inventario ID $idinventario a $nuevaExistencia por modificación de orden $idorden','$updInventario');
+                }
+
+                $del = "delete from detalles where orden=$idorden";
+                mysqli_query($mysqli,$del) or die('El Delete falló: '.$mysqli -> error);
+                registro_auditoria('detalles','DELETE','Eliminó detalles previos de la orden $idorden','$del');
+
+                for ($i = 1; $i <= $total; $i++)
+                {
+                    if ($cantidad[$i] <> '')
+                    {
+                        $ins2 = "insert into detalles (orden,inventario,cantidad) values ($idorden,$i,$cantidad[$i])";
+                        mysqli_query($mysqli,$ins2) or die('Agregar falló: '.$mysqli -> error);
+                        registro_auditoria('detalles','INSERT','Actualizó detalle orden $idorden, inventario ID $i, cantidad $cantidad[$i]','$ins2');
+
+                        $existencia = b_combo($mysqli,'existencia','inventario','id',$i);
+                        $resta = $existencia - $cantidad[$i];
+
+                        $upd = "update inventario set existencia = '$resta' where id=$i";
+                        mysqli_query($mysqli,$upd) or die('El Update falló: '.$mysqli -> error);
+                        registro_auditoria('inventario','UPDATE','Reducido inventario ID $i a $resta tras modificación de orden $idorden','$upd');
+                    }
+                }
+
+                if ($nombreUsuario !== '') {
+                    $nombreUsuarioEsc = mysqli_real_escape_string($mysqli, $nombreUsuario);
+                    $updOrden = "update ordenes set usuario_nombre = '$nombreUsuarioEsc' where id=$idorden";
+                    mysqli_query($mysqli,$updOrden) or die('El Update falló: '.$mysqli -> error);
+                    registro_auditoria('ordenes','UPDATE','Modificó orden ID $idorden por $nombreUsuarioEsc','$updOrden');
+                }
+
+    ?>
+            <script language=javascript>
+                alert('ORDEN MODIFICADA');
+                window.location.href='ordenesvista.php';
+            </script>
+	<?php
+            }
+        }

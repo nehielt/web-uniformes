@@ -221,6 +221,7 @@ if ($resultAlertasStock) {
         max-height: 120px;
         width: auto;
         display: block;
+        cursor: pointer;
     }
 
     @media (max-width: 960px) {
@@ -325,5 +326,11 @@ if ($resultAlertasStock) {
 </div>
 
 <div class="dashboard-logo">
-    <img src="logouneti.jpg" alt="Logo UNETI">
+    <img src="logouneti.jpg" alt="Logo UNETI" id="logouneti">
 </div>
+
+<script>
+    document.getElementById('logouneti').addEventListener('click', function () {
+        alert('Este aplicaci\u00f3n fue desarrollada por Monica Mendez y Nehiel Tovar');
+    });
+</script>
